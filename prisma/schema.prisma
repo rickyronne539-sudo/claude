@@ -1,0 +1,106 @@
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id                String       @id @default(auto()) @map("_id") @db.ObjectId
+  email             String       @unique
+  // Null for accounts that only sign in with Google
+  passwordHash      String?
+  name              String?
+  // Set once the user proves they own the email (Google sign-in or a reset link)
+  emailVerifiedAt   DateTime?
+  googleId          String?
+  passwordChangedAt DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  sessions          Session[]
+  enrollments       Enrollment[]
+  payments          Payment[]
+  resetTokens       PasswordResetToken[]
+
+  @@index([googleId])
+}
+
+model Session {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  // SHA-256 of the cookie value. The raw token only ever lives in the user's cookie.
+  sessionToken String   @unique
+  userId       String   @db.ObjectId
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt    DateTime
+  rememberMe   Boolean  @default(false)
+  userAgent    String?
+  ipAddress    String?
+  lastSeenAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// One-time "reset your password" links. Only a hash of the token is stored.
+model PasswordResetToken {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String    @db.ObjectId
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// Recent sign-in / sign-up / reset attempts, used for rate limiting.
+model AuthAttempt {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  key       String // e.g. "login-email:a@b.com", "login-ip:1.2.3.4"
+  createdAt DateTime @default(now())
+
+  @@index([key, createdAt])
+  @@index([createdAt])
+}
+
+model Enrollment {
+  id               String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId           String    @db.ObjectId
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId         String
+  courseTitle      String
+  isDepositPaid    Boolean   @default(false)
+  isExamPaid       Boolean   @default(false)
+  isCertified      Boolean   @default(false)
+  completedLessons String[]  @default([])
+  examScore        Int? // percent, set by the server when grading
+  examAttempts     Int       @default(0)
+  credentialId     String?
+  certifiedAt      DateTime?
+  enrolledAt       DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([userId, courseId])
+  @@index([credentialId])
+}
+
+// One row per Stripe Checkout payment. The unique session id makes fulfilment
+// safe to run twice (redirect back + webhook).
+model Payment {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId          String   @db.ObjectId
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId        String
+  purpose         String // deposit | exam_balance | full
+  stripeSessionId String   @unique
+  amountCents     Int
+  currency        String   @default("usd")
+  status          String   @default("paid")
+  createdAt       DateTime @default(now())
+
+  @@index([userId])
+}
